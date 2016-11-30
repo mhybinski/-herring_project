@@ -1,0 +1,303 @@
+---
+title: "Projekt - Analiza długości śledzia oceanicznego"
+author: "Maciej Hybiński"
+date: "21 11 2016"
+output:
+  html_document:
+    number_sections: yes
+    toc: yes
+    toc_float: true
+    fig_width: 8
+    fig_height: 6
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Wstęp
+
+Analizie poddany został zbiór danych na temat połowu śledzia oceanicznego w Europie. Do analizy zebrano pomiary śledzi i warunków w jakich żyją z ostatnich 60 lat. Dane były pobierane z połowów komercyjnych jednostek. W ramach połowu jednej jednostki losowo wybierano od 50 do 100 sztuk trzyletnich śledzi. 
+
+Po dokładnym i skrupulatnym  przetrzeworzeniu danych analiza wykazała, że wpływ na długość śledzi ma w głównej mierze temperatura przy powierzchni wody, ale także dostępność pewnych gatunków planktonu występujących w obszarze. 
+
+# Inicjalizacja danych
+
+## Instalowanie i ładnowanie wykorzystywanych biblioteki
+```{r biblioteki, cache=TRUE,results='hide', warning=FALSE, message=FALSE,error=FALSE}
+install.packages("knitr",repos = "http://cran.us.r-project.org")
+install.packages("shiny",repos = "http://cran.us.r-project.org")
+install.packages("dplyr",repos = "http://cran.us.r-project.org")
+install.packages("reshape2",repos = "http://cran.us.r-project.org")
+install.packages("ggplot2",repos = "http://cran.us.r-project.org")
+install.packages("zoo",repos = "http://cran.us.r-project.org")
+install.packages("corrplot",repos = "http://cran.us.r-project.org")
+install.packages("caret",repos = "http://cran.us.r-project.org")
+
+library('knitr')
+library('shiny')
+library('dplyr')
+library('reshape2')
+library('ggplot2') 
+library('zoo')
+library('corrplot')
+library('caret')
+```
+
+## Wczytanie danych
+```{r importDataset, cache=TRUE, results='hide', message=FALSE , warning=FALSE}
+initial <-  read.csv(url("http://www.cs.put.poznan.pl/dbrzezinski/teaching/zed/sledzie.csv"),header = TRUE, sep = ",", comment.char = "", stringsAsFactors = TRUE)
+```
+
+# Informacje o danych
+
+## Opis atrubutów
+
+| Dane  | Opis  | Dane  |
+|---------|-----------------------------|------------------------------------|
+| length  | długość śledzia | cm  |
+| cfin1  |  dostępność planktonu |  skupisko Calanus finmarchicus gat. 1 |
+| cfin2  |  dostępność planktonu |  skupisko Calanus finmarchicus gat. 2 |
+| chel1  | dostępność planktonu  | skupisko Calanus helgolandicus gat. 1  |
+| chel2  | dostępność planktonu  | skupisko Calanus helgolandicus gat. 2  |
+| lcop1  | dostępność planktonu  | skupisko widłonogów gat. 1  |
+| lcop2  | dostępność planktonu  | skupisko widłonogów gat. 2  |
+| fbar  | intensywność połowów w regionie  | ułamek pozostawionego narybku  |
+| recr  |  roczny narybek  | liczba śledzi  |
+| cumf  | łączne roczne natężenie połowów w regionie  | ułamek zachowanego narybku  |
+| totaln  |  łączna liczba ryb złowionych w ramach pojedynczego połowu  | liczba śledzi  |
+| sst  |  temperatura przy powierzchni wody | stopnie °C |
+| sal  |  poziom zasolenia |  liczba części na milion |
+| xmonth  | miesiąc połowu  | numer miesiąca  |
+| nao  |  oscylacja północnoatlantycka |  mb |
+
+
+## Podstawowe statystyki
+Na bazie poniższych informacji możemy stwierdzić, które kolumny zawierają wartości NA.
+
+```{r staty, echo=FALSE}
+knitr::kable(summary(initial))
+```
+
+
+## Klasy atrybutów
+
+
+```{r klasy, echo=FALSE}
+
+
+sapply(initial, class)
+```
+
+Zyskujemy w tym momecie informacje na temat tego, które atrybuty będą podlegać zmienie typu klasy na numeryczną, by poradzić sobie z wartościami NA.
+
+
+# Zamiana pustych wartości
+By poradzić sobie z pustymi wartościami, korzystamy z funkcji na.locf (Last Observation Carried Forward)
+zawartej w pakiecie zoo. Zapewniamy możliwość wywołania tej operacji po przez zamianę typów wartości z factor na numeric. Działanie funkcji polega na zastępowaniu wartości NA ostatnim obiektem poprzedającym nie będącym wartością NA. By zapewnić powtarzalność wyników i poprawne wykonanie funkcji najpierw należy sprawdzić,
+czy pierwszy element dla każdego atrybuty ma wartość NA. Jeśli takowy występuje, zastępujemy go medianą z wszystkich wartości dla danego atrybutu.
+
+Wywołanie funkcji set.seed(25) zapewnia powtarzalność wyników dokonywanych operacji.
+```{r missing, results='hide', warning=FALSE, message=FALSE}
+
+set.seed(25)
+
+initial$cfin1 <- as.numeric(as.character(initial$cfin1))
+initial$cfin2 <- as.numeric(as.character(initial$cfin2))
+initial$chel1 <- as.numeric(as.character(initial$chel1))
+initial$chel2 <- as.numeric(as.character(initial$chel2))
+initial$lcop1 <- as.numeric(as.character(initial$lcop1))
+initial$lcop2 <- as.numeric(as.character(initial$lcop2))
+initial$sst <- as.numeric(as.character(initial$sst))
+
+initialRaw <- initial %>% select(-c(X,xmonth,chel1,chel2,cumf))
+
+for(i in 1:ncol(initial)){
+  if(is.na(initial[1,i])){
+    initial[1,i] <- median(initial[,i], na.rm = TRUE)
+  }
+}
+
+for(i in 1:ncol(initial)){
+  if(anyNA(initial[,i])){
+    initial[,i] <- na.locf(initial[,i])
+  }
+}
+```
+
+# Budowanie histogramów
+
+Na podstawie poniższych wykresów jesteśmy w stanie poznać rozkład wartości poszczególnych zmiennych.
+```{r histogramy, echo=FALSE, warning=FALSE, message=FALSE}
+
+ui <- pageWithSidebar(
+  headerPanel('Prezentacja rozkładu wartości'),
+  sidebarPanel(
+    selectInput('binsy',
+    label = "Liczba binsów dla każdego histogramu: ",
+    choices = c(10, 15, 20, 25, 35, 40, 45,50),
+    selected = 25),verbatimTextOutput("info")
+  ),
+  mainPanel(
+    plotOutput('plot1', width = "1000px", height = "1000px", click = "plot_click")
+  )
+)
+
+server <- function(input, output) {
+  #podział danych na kolumny
+  data <- melt(select(initial,-X))
+  output$plot1 <- renderPlot({
+    ggplot(data,aes(x = value)) + 
+facet_wrap(~variable,scales = "free_x") + geom_histogram(colour = "black", fill = "red",bins = input$binsy)
+      })
+  output$info <- renderText({
+    paste0("value=", round(as.double(input$plot_click$x),digits = 2), "\ncount=", round(as.double(input$plot_click$y),digits = 2))
+  })
+}
+
+shinyApp(ui = ui, server = server)
+```
+
+# Zmiana długości śledzi w czasie
+
+Poniższe wykresy przedstawiają zmianę długości śledzi wględem czasu z możliwością wyboru poszczególnych okresów, a także wybranie konkretnego punktu na wykresie, który wyświetli wartość punktu na obu osiach.
+
+## Zmiana długości śledzi w czasie - wszystkie wpisy
+```{r timeToLength, results='hide', warning=FALSE, message=FALSE, echo=FALSE}
+ggplot(initial,aes(X,length)) + geom_point(alpha=1/20, colour = "red") + geom_smooth(method="auto", se=TRUE, color="blue") + theme_bw()
+```
+
+## Zmiana długości śledzi śledzi dla każdego miesiąca
+```{r przedstawienie_danych, echo=FALSE, warning=FALSE}
+ui <- pageWithSidebar(
+  headerPanel(''),
+  sidebarPanel(
+    selectInput('month',
+    label = "Rozmiar śledzia w miesiącu: ",
+    choices = c("Styczeń"="1", "Luty"="2", "Marzec"="3", "Kwiecień"="4", "Maj"="5", "Czerwiec"="6", "Lipiec"="7", "Sierpień"="8", "Wrzesień"="9", "Parździernik"="10", "Listopad"="11", "Grudzień"="12"),
+    selected = "Styczeń"),verbatimTextOutput("info")
+  ),
+  mainPanel(
+    plotOutput('plot2',click = "plot_click")
+  )
+)
+
+server <- function(input, output) {
+ data <- reactive(
+      initial %>%
+      filter(xmonth == input$month) %>%
+      select(X, length))
+
+  output$plot2 <- renderPlot({
+    ggplot(data(),aes(x=X,y=length)) + geom_point(alpha=1/20, colour = "red") + geom_smooth(method="auto", se=TRUE,color="blue")  + theme_bw() 
+      }
+    )
+  output$info <- renderText({
+    paste0("length=", round(as.double(input$plot_click$x),digits = 2), "\nvalue=", round(as.double(input$plot_click$y),digits = 2))
+  })
+}
+
+shinyApp(ui = ui, server = server)
+```
+
+# Korelację pomiędzy atrybutami
+
+## Korelacje - tabela
+
+```{r tabela}
+
+correlation <- select(initial,-c(X,xmonth))
+
+knitr::kable(cor(correlation),digits = 4)
+
+```
+
+## Korelacje - prezentacja graficzna
+```{r wykres}
+
+corrplot(cor(correlation),method = "shade", type = "lower", order = "hclust")
+```
+
+Bazując na powyższych korelacji można stwierdzić, że długość śledzia jest najbardziej zależna od temperatury wody oraz oscylacji północnoatlantyckiej. W pewnym stopniu długość jest także powiązana z dostępnością różnego gatunku planktu (chel1, lcop1). 
+
+
+
+## Tworzenie regresora
+
+Dokonujemy podziału zbioru danych na zbiór treningowy i zbiór testowy. Dla zbioru treningowego używamy dane bez wartości NA i bez atrybutów, które wykluczamy ze względu na brak pływu na wartość atrybutu "length". Dla zbioru testowego używamy dane w takiej postaci, jak były wczytane, ale także bez tych atrybutów, które nie zostały uwzględnione dla danych treningowych.
+
+
+```{r regresor,  warning=FALSE, message=FALSE, cache=TRUE}
+
+initialClean <- select(initial,-c(X,xmonth,chel1,chel2,cumf))
+
+inTraining <-
+  createDataPartition(
+    # atrybut do stratyfikacji
+    y = initialClean$length,
+    # procent w zbiorze uczącym
+    p = .80,
+    # chcemy indeksy a nie listęx
+    list = FALSE)
+
+training <- initialClean[ inTraining,]
+testing  <- initialRaw[-inTraining,]
+
+ctrl <- trainControl(
+  # powtórzona ocena krzyżowa
+  method = "repeatedcv",
+  # liczba podziałów
+  number = 3,
+  # liczba powtórzeń
+  repeats = 3)
+
+
+fit <- train(length ~ .,
+             data = training,
+             method = "rf",
+             trControl = ctrl,
+             importance = TRUE,
+             ntree = 10
+)
+
+```
+
+Pod zmienną fit znajduję się  model klasyfikacyjny zgodnie z algorytmem Random Forest.
+
+## Stworzony model
+```{r fit}
+fit
+```
+
+## Przewidywanie wartości i ocena błędu
+```{r check}
+testing <- na.omit(testing)
+predicted <- predict(fit,testing)
+actual <- testing[,"length"]
+RMSE <- sqrt(mean((predicted-actual)^2))
+RMSE
+```
+
+Wyliczona RMSA jest niewiele większa od przewidywanej, więc nasz zbiór nie jest przetrenowany.
+
+# Analiza ważności atrybutów
+```{r important}
+varImp(fit$finalModel)
+```
+
+Analiza ważności atrybutów wskazuję na to, że przede wszystkim temperatura przy powierzchni wody, ale również różne gatunki planktonu wpływają na długość śledzi.
+
+## Podsumowanie
+
+
+Wejściowy zbiór zawierał ciężkie dane do przetworzenia. Dane były posortowane chronologicznie, przez co atrybut X odpowiadał za rozkład czasu. Nie był on powiązany z atrybutem xmonth, co również nie pomogło przy analizie zawartości danych.
+
+Wiele atrybutów posiadało identyczne wartości dla różnym długości śledzia, co należało uwzględnić przy przetwarzaniu danych i budowaniu modelu.
+
+
+
+<script tyle="text/javascript">
+$('#budowanie-histogramow iframe').attr({"height": "1100"})
+$('#zmiana-dugosci-sledzi-sledzi-dla-kazdego-miesiaca iframe').attr({"height": "500"})
+</script>
